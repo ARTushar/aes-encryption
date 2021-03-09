@@ -1,9 +1,10 @@
+from operator import xor
 from constants import *
 from math import ceil
 from typing import List
 
 
-class EncryptionKeyGeneration:
+class AESKeySchedule:
 
   def __init__(self, key: str, total_word: int, total_rounds: int, max_key_length: int) -> None:
     self.total_word = total_word
@@ -126,24 +127,177 @@ class EncryptionKeyGeneration:
     return expanded_keys
 
 
-def slice_plain_text(plain_text: str, slice_length=128) -> List[BitVector]:
-  vector = BitVector(textstring=plain_text)
-  vectors = []
-  # print(vector.size)
-  total_index = ceil(vector.size / slice_length)
 
-  for i in range(total_index):
-    upto = i * slice_length + slice_length
-    if upto > vector.size:
-      upto = vector.size
-    # print(upto, i)
-    vectors.append(vector[i * slice_length: upto])
+class State:
+  def __init__(self, row: int, col: int) -> None:
+    self.row = row
+    self.col = col
+    self.matrix = None
 
-  if total_index != vector.size / slice_length:
-    vectors[total_index -
-            1].pad_from_right(slice_length-vectors[total_index-1].size)
+  def generate_initial_matrix(self):
+    self.matrix = [None] * self.row
+    for i in range(self.row):
+      self.matrix[i] = [None] * self.col
+      for j in range(self.col):
+        self.matrix[i][j] = BitVector(intVal=0, size=8)
+    return self.matrix
+  
+  def get_Matrix(self) -> List[List[BitVector]]:
+    return self.matrix
 
-  return vectors
+  def generate_from_vector(self, vector: BitVector) -> None:
+    self.matrix = [None] * self.row
+    hex_str = vector.get_bitvector_in_hex()
+    k = 0
+    for i in range(self.row):
+      self.matrix[i] = [None] * self.col
+      for j in range(self.col):
+        self.matrix[j][i] = BitVector(intVal=int(hex_str[k: k+2], 16), size=8)
+        k += 2
+    return self.matrix
+  
+  def generate_from_list(self, list: List[List[BitVector]]) -> None:
+    self.matrix = [None] * self.row
+    k = 0
+    for i in range(self.row):
+      self.matrix[i] = [None] * self.col
+      for j in range(self.col):
+        self.matrix[j][i] = list[i][j].deep_copy()
+    return self.matrix
+
+
+class Matrix:
+  def __init__(self) -> None:
+      pass
+
+  @staticmethod
+  def xor(a: State, b: State) -> State:
+    assert a.row == b.row and a.col == b.col
+    result = [None] * a.row
+    for i in range(a.row):
+      result[i] = [None] * a.col
+      for j in range(b.col):
+        result[i][j] = a.get_Matrix()[i][j] ^ b.get_Matrix()[i][j]
+
+    return result
+
+  @staticmethod
+  def multiply(a: State, b: State) -> State:
+    assert a.col == b.row
+
+    row = a.row
+    col = b.col
+    result_state = State(row, col)
+    result_state.generate_initial_matrix()
+    for i in range(row):
+      for j in col:
+        for k in range(a.col):
+          result_state.get_Matrix[i][j] ^= a.get_Matrix()[i][k].gf_multiply_modular(
+              b.get_Matrix()[k][j], AES_modulus, 8)
+
+    return result_state
+
+
+class AES:
+
+  def __init__(self, plain_text: str, keySchedule: AESKeySchedule) -> None:
+    self.plain_text = plain_text
+    self.keySchedule = keySchedule
+    self.slice_length = 128
+    self.round_keys = []
+    self.mix_state = State(4, 4)
+    self.mix_state.matrix = mixer
+
+    self._pad_plain_text()
+    self._organize_round_keys()
+
+  def _pad_plain_text(self):
+    total_chars = self.slice_length / 8
+    if(len(self.plain_text) % total_chars != 0):
+      for i in range(total_chars - len(self.plain_text) % total_chars):
+        self.plain_text += " "
+  
+  def _organize_round_keys(self):
+    i = 0
+    keys = self.keySchedule.get_encryption_keys()
+    total_keys = self.keySchedule.total_rounds
+    self.round_keys = [None] * total_keys
+    for i in range(total_keys):
+      self.round_keys.append(keys[i*4: i*4+4])
+
+  def slice_plain_text(self) -> List[BitVector]:
+    vector = BitVector(textstring=self.plain_text)
+    vectors = []
+    # print(vector.size)
+    total_index = ceil(vector.size / self.slice_length)
+
+    for i in range(total_index):
+      start = i * self.slice_length
+      end = start + self.slice_length
+      vectors.append(vector[start: end])
+
+    return vectors
+  
+  def add_round_key(self, current_state: State, round_no) -> State:
+    key_state = State(4, 4)
+    key_state.generate_from_list(self.round_keys[round_no])
+    return Matrix.xor(current_state, key_state)
+
+  def substitute_bytes(self, current_state: State) -> State:
+    new_state = State(current_state.row, current_state.col)
+    new_state.matrix = [None] * new_state.row
+    for i in range(current_state.row):
+      new_state.matrix[i] = self.keySchedule.sub_word(current_state.get_Matrix[i])
+    return new_state
+
+  def _shift_i_left_row(self, row: List[BitVector], i):
+    new_row = [None] * len(row)
+    for j in range(len(row)):
+      new_row[j-i] = row[j]
+    return new_row
+
+  def _shift_i_right_row(self, row: List[BitVector], i):
+    new_row = [None] * len(row)
+    for j in range(len(row)):
+      new_row[(j+i) % len(row)] = row[j]
+    return new_row
+
+  def shift_rows(self, current_state: State) -> State:
+    new_state = State(current_state.row, current_state.col)
+    new_state.matrix = [None] * new_state.row
+
+    for i in range(1, current_state.row):
+      new_state.matrix[i] = self._shift_i_left_row(
+          current_state.get_Matrix[i], i)
+
+    return new_state
+
+  def mix_column(self, current_state: State) -> State:
+    return Matrix.multiply(self.mix_column, current_state)
+
+  def perform_common_encrypt_round(self, current_state: State, round_no: int) -> State:
+    new_state = self.substitute_bytes(current_state)
+    new_state = self.shift_rows(new_state)
+    new_state = self.mix_column(new_state)
+    new_state = self.add_round_key(new_state, round_no)
+    return new_state
+
+  def perform_last_encrypt_round(self, current_state: State, round_no: int) -> State:
+    new_state = self.substitute_bytes(current_state)
+    new_state = self.shift_rows(new_state)
+    new_state = self.add_round_key(new_state, round_no)
+    return new_state
+
+  def encrypt(self):
+    vectors = self.slice_plain_text()
+    for vector in vectors:
+      current_state = State(4, 4)
+      current_state.generate_from_vector(vector)
+      current_state = self.add_round_key(current_state, 0)
+      total_rounds = self.keySchedule.total_rounds
+      for i in range(1, total_rounds-1):
+        current_state = self.perform_common_encrypt_round(current_state, i)
+      current_state = self.perform_last_encrypt_round(total_rounds-1)
 
 
 def main():
@@ -152,7 +306,7 @@ def main():
   vectors = slice_plain_text(plain_text=encryption_key)
   # for vect in vectors:
   # print(vect.get_bitvector_in_hex())
-  encryptionMechanism = EncryptionKeyGeneration(encryption_key, 4, 11, 128)
+  encryptionMechanism = AESKeySchedule(encryption_key, 4, 11, 128)
   encryptionMechanism.print_keys()
 
 
