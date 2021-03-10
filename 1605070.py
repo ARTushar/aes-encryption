@@ -1,7 +1,34 @@
-from constants import *
+from BitVector import *
 from math import ceil
 from typing import List
 from time import time
+
+mixer = [
+    [BitVector(hexstring="02"), BitVector(hexstring="03"),
+     BitVector(hexstring="01"), BitVector(hexstring="01")],
+    [BitVector(hexstring="01"), BitVector(hexstring="02"),
+     BitVector(hexstring="03"), BitVector(hexstring="01")],
+    [BitVector(hexstring="01"), BitVector(hexstring="01"),
+     BitVector(hexstring="02"), BitVector(hexstring="03")],
+    [BitVector(hexstring="03"), BitVector(hexstring="01"),
+     BitVector(hexstring="01"), BitVector(hexstring="02")]
+]
+
+inv_mixer = [
+    [BitVector(hexstring="0E"), BitVector(hexstring="0B"),
+     BitVector(hexstring="0D"), BitVector(hexstring="09")],
+    [BitVector(hexstring="09"), BitVector(hexstring="0E"),
+     BitVector(hexstring="0B"), BitVector(hexstring="0D")],
+    [BitVector(hexstring="0D"), BitVector(hexstring="09"),
+     BitVector(hexstring="0E"), BitVector(hexstring="0B")],
+    [BitVector(hexstring="0B"), BitVector(hexstring="0D"),
+     BitVector(hexstring="09"), BitVector(hexstring="0E")]
+]
+
+AES_modulus = BitVector(bitstring='100011011')
+
+sbox = None
+inv_sbox = None
 
 
 class AESKeySchedule:
@@ -458,6 +485,34 @@ class AES:
     print(current_state)
 
 
+def rotate_left(val, rotate, max_bits=8):
+  return (val << rotate % max_bits) & (2 ** max_bits - 1) \
+      | ((val & (2 ** max_bits - 1)) >> (max_bits - (rotate % max_bits)))
+
+
+def calculate_sbox_inverse_sbox():
+  p = 1
+  q = 1
+
+  sbox = [None] * 256
+  inverse_sbox = [None] * 256
+
+  for i in range(1, 256):
+    b = BitVector(intVal=i, size=8).gf_MI(AES_modulus, 8)
+    b = b.intValue()
+
+    s = b ^ rotate_left(b, 1) ^ rotate_left(b, 2) ^ \
+        rotate_left(b, 3) ^ rotate_left(b, 4) ^ 0x63
+
+    sbox[i] = s
+    # print(sbox[p])
+    inverse_sbox[s] = i
+
+  sbox[0] = 0x63
+  inverse_sbox[0x63] = 0
+
+  return sbox, inverse_sbox
+
 def main():
   plain_text = input()
   encryption_key = input()
@@ -501,4 +556,5 @@ def main():
 
 
 if __name__ == '__main__':
+  sbox, inv_sbox =  calculate_sbox_inverse_sbox()
   main()
