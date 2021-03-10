@@ -3,6 +3,7 @@ from math import ceil
 from typing import List
 from time import time
 
+
 class AESKeySchedule:
 
   def __init__(self, key: str, total_word: int, total_rounds: int, max_key_length: int) -> None:
@@ -10,6 +11,7 @@ class AESKeySchedule:
     self.max_key_length = max_key_length
     self.total_rounds = total_rounds
     self.key = key
+    self.modified_key = None
     self.byte_length = 8
     self.word_length = 32
     self.encryption_keys = None
@@ -70,6 +72,9 @@ class AESKeySchedule:
       root_key.pad_from_right(self.max_key_length - root_key.size)
     elif root_key.size > self.max_key_length:
       root_key = root_key[0:self.max_key_length]
+    
+    self.modified_key = root_key
+
     root_words = []
     total_index = int(self.max_key_length / self.word_length)
     for i in range(total_index):
@@ -126,7 +131,6 @@ class AESKeySchedule:
     return expanded_keys
 
 
-
 class State:
   def __init__(self, row: int, col: int) -> None:
     self.row = row
@@ -140,7 +144,7 @@ class State:
       for j in range(self.col):
         self.matrix[i][j] = BitVector(intVal=0, size=8)
     return self.matrix
-  
+
   def get_Matrix(self) -> List[List[BitVector]]:
     return self.matrix
 
@@ -150,13 +154,13 @@ class State:
     k = 0
     for i in range(self.row):
       self.matrix[i] = [None] * self.col
-    
+
     for i in range(self.row):
       for j in range(self.col):
         self.matrix[j][i] = BitVector(intVal=int(hex_str[k: k+2], 16), size=8)
         k += 2
     return self.matrix
-  
+
   def generate_from_list(self, list: List[List[BitVector]]) -> None:
     self.matrix = [None] * self.row
     for i in range(self.row):
@@ -174,13 +178,20 @@ class State:
         str += col.get_bitvector_in_hex() + " "
       str += '\n'
     return str
-  
+
   def get_hexstr(self) -> str:
     str = ""
     for i in range(self.col):
       for j in range(self.row):
-        str += self.matrix[j][i].get_bitvector_in_hex() 
-    return str 
+        str += self.matrix[j][i].get_bitvector_in_hex()
+    return str
+  
+  def get_ascii_str(self) -> str:
+    str = ""
+    for i in range(self.col):
+      for j in range(self.row):
+        str += self.matrix[j][i].get_bitvector_in_ascii()
+    return str
 
 
 class Matrix:
@@ -228,11 +239,12 @@ class AES:
     self.inverse_mix_state = State(4, 4)
     self.inverse_mix_state.matrix = inv_mixer
     self.cypher_states = []
+    self.decypher_states = []
     self._pad_plain_text()
     self._organize_round_keys()
 
   def _pad_plain_text(self):
-    total_chars = self.slice_length / 8
+    total_chars = int(self.slice_length / 8)
     if(len(self.plain_text) % total_chars != 0):
       for i in range(total_chars - len(self.plain_text) % total_chars):
         self.plain_text += " "
@@ -321,26 +333,33 @@ class AES:
     else:
       return Matrix.multiply(self.inverse_mix_state, current_state)
 
-  def perform_common_encrypt_round(self, current_state: State, round_no: int) -> State:
+  def perform_encrypt_round(self, current_state: State, round_no: int) -> State:
     new_state = self.substitute_bytes(current_state)
     new_state = self.shift_rows(new_state)
-    new_state = self.mix_column(new_state)
+    if self.keySchedule.total_rounds-1 != round_no:
+      new_state = self.mix_column(new_state)
     new_state = self.add_round_key(new_state, round_no)
     return new_state
 
-  def perform_last_encrypt_round(self, current_state: State, round_no: int) -> State:
-    new_state = self.substitute_bytes(current_state)
-    new_state = self.shift_rows(new_state)
+  def perform_decrypt_round(self, current_state: State, round_no: int) -> State:
+    new_state = self.shift_rows(current_state, left=False)
+    new_state = self.substitute_bytes(new_state, inverse=True)
     new_state = self.add_round_key(new_state, round_no)
+    if round_no != 0:
+      new_state = self.mix_column(new_state, inverse=True)
     return new_state
-
-  def _append_cypher_text(self, final_state: State) -> None:
-    self.cypher_states.append(final_state)
 
   def print_cypher(self):
-    print("Cypher:")
+    print("Cipher Text:")
     for i in range(len(self.cypher_states)):
-      print(self.cypher_states[i].get_hexstr())
+      print(self.cypher_states[i].get_hexstr() + " [In HEX]")
+      print(self.cypher_states[i].get_ascii_str() + " [In ASCII]")
+  
+  def print_decypher(self):
+    print("Deciphered Text:")
+    for i in range(len(self.decypher_states)):
+      print(self.decypher_states[i].get_hexstr() + " [In HEX]")
+      print(self.decypher_states[i].get_ascii_str() + " [In ASCII]")
 
   def encrypt(self):
     vectors = self.slice_plain_text()
@@ -349,12 +368,18 @@ class AES:
       current_state.generate_from_vector(vector)
       current_state = self.add_round_key(current_state, 0)
       total_rounds = self.keySchedule.total_rounds
-      for i in range(1, total_rounds-1):
-        current_state = self.perform_common_encrypt_round(current_state, i)
-      current_state = self.perform_last_encrypt_round(
-          current_state, total_rounds-1)
-      self._append_cypher_text(current_state)
+      for i in range(1, total_rounds):
+        current_state = self.perform_encrypt_round(current_state, i)
+      self.cypher_states.append(current_state)
       # print(current_state)
+
+  def decrypt(self):
+    for current_state in self.cypher_states:
+      current_key = self.keySchedule.total_rounds-1
+      current_state = self.add_round_key(current_state, current_key)
+      for i in range(current_key-1, -1, -1):
+        current_state = self.perform_decrypt_round(current_state, i)
+      self.decypher_states.append(current_state)
 
   def test(self):
     state_b = State(4, 4)
@@ -389,7 +414,7 @@ class AES:
     current_state = self.substitute_bytes(current_state)
     print(current_state)
 
-    current_state = self.shift_rows(current_state)
+    current_state = self.shift_rows(current_state, False)
     print(current_state)
 
     current_state = self.mix_column(current_state)
@@ -399,20 +424,41 @@ class AES:
 def main():
   plain_text = input()
   encryption_key = input()
-  # for vect in vectors:
-  # print(vect.get_bitvector_in_hex())
+
+  # scheduling
   schedule_time = time()
   schedule = AESKeySchedule(encryption_key, 4, 11, 128)
   schedule_time = time() - schedule_time
-  print(schedule_time)
-  # encryptionMechanism.print_keys()
+
   aes = AES(plain_text, schedule)
   # aes.test()
-  tick = time()
+  #  encryption
+  encryption_time = time()
   aes.encrypt()
-  print(time() - tick)
-  aes.print_cypher()
+  encryption_time = time() - encryption_time
 
+  # decryption
+  decryption_time = time()
+  aes.decrypt()
+  decryption_time = time() - decryption_time
+
+  # information
+  print("Plain Text:")
+  print(plain_text + " [In ASCII]")
+  print(BitVector(textstring=plain_text).get_bitvector_in_hex() + " [In HEX]")
+  print()
+  print("Key:")
+  print(schedule.modified_key.get_bitvector_in_ascii()+ " [In ASCII]")
+  print(schedule.modified_key.get_bitvector_in_hex() + " [In HEX]")
+  print()
+  aes.print_cypher()
+  print()
+  aes.print_decypher()
+
+  print("Execution Time")
+  print("Key Scheduling: " + str(schedule_time))
+  print("Encryption Time: " + str(encryption_time))
+  print("Decryption Time: " + str(decryption_time))
 
 if __name__ == '__main__':
   main()
