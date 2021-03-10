@@ -1,4 +1,3 @@
-from operator import xor
 from constants import *
 from math import ceil
 from typing import List
@@ -165,6 +164,14 @@ class State:
         self.matrix[j][i] = list[i][j].deep_copy()
     return self.matrix
 
+  def __str__(self) -> str:
+    str = ""
+    for row in self.matrix:
+      for col in row:
+        str += col.get_bitvector_in_hex() + " "
+      str += '\n'
+    return str
+
 
 class Matrix:
   def __init__(self) -> None:
@@ -173,11 +180,12 @@ class Matrix:
   @staticmethod
   def xor(a: State, b: State) -> State:
     assert a.row == b.row and a.col == b.col
-    result = [None] * a.row
+    result = State(a.row, a.col)
+    result.matrix = [None] * result.row
     for i in range(a.row):
-      result[i] = [None] * a.col
+      result.matrix[i] = [None] * result.col
       for j in range(b.col):
-        result[i][j] = a.get_Matrix()[i][j] ^ b.get_Matrix()[i][j]
+        result.matrix[i][j] = a.get_Matrix()[i][j] ^ b.get_Matrix()[i][j]
 
     return result
 
@@ -190,9 +198,9 @@ class Matrix:
     result_state = State(row, col)
     result_state.generate_initial_matrix()
     for i in range(row):
-      for j in col:
+      for j in range(col):
         for k in range(a.col):
-          result_state.get_Matrix[i][j] ^= a.get_Matrix()[i][k].gf_multiply_modular(
+          result_state.get_Matrix()[i][j] ^= a.get_Matrix()[i][k].gf_multiply_modular(
               b.get_Matrix()[k][j], AES_modulus, 8)
 
     return result_state
@@ -216,7 +224,7 @@ class AES:
     if(len(self.plain_text) % total_chars != 0):
       for i in range(total_chars - len(self.plain_text) % total_chars):
         self.plain_text += " "
-  
+
   def _organize_round_keys(self):
     i = 0
     keys = self.keySchedule.get_encryption_keys()
@@ -237,7 +245,7 @@ class AES:
       vectors.append(vector[start: end])
 
     return vectors
-  
+
   def add_round_key(self, current_state: State, round_no) -> State:
     key_state = State(4, 4)
     key_state.generate_from_list(self.round_keys[round_no])
@@ -247,7 +255,8 @@ class AES:
     new_state = State(current_state.row, current_state.col)
     new_state.matrix = [None] * new_state.row
     for i in range(current_state.row):
-      new_state.matrix[i] = self.keySchedule.sub_word(current_state.get_Matrix[i])
+      new_state.matrix[i] = self.keySchedule.sub_word(
+          current_state.get_Matrix()[i])
     return new_state
 
   def _shift_i_left_row(self, row: List[BitVector], i):
@@ -266,14 +275,14 @@ class AES:
     new_state = State(current_state.row, current_state.col)
     new_state.matrix = [None] * new_state.row
 
-    for i in range(1, current_state.row):
+    for i in range(0, current_state.row):
       new_state.matrix[i] = self._shift_i_left_row(
-          current_state.get_Matrix[i], i)
+          current_state.get_Matrix()[i], i)
 
     return new_state
 
   def mix_column(self, current_state: State) -> State:
-    return Matrix.multiply(self.mix_column, current_state)
+    return Matrix.multiply(self.mix_state, current_state)
 
   def perform_common_encrypt_round(self, current_state: State, round_no: int) -> State:
     new_state = self.substitute_bytes(current_state)
@@ -299,15 +308,56 @@ class AES:
         current_state = self.perform_common_encrypt_round(current_state, i)
       current_state = self.perform_last_encrypt_round(total_rounds-1)
 
+  def test(self):
+    state_b = State(4, 4)
+    state_b.matrix = [
+        [BitVector(hexstring="63"), BitVector(hexstring="EB"),
+         BitVector(hexstring="9F"), BitVector(hexstring="A0")],
+        [BitVector(hexstring="2F"), BitVector(hexstring="93"),
+         BitVector(hexstring="92"), BitVector(hexstring="C0")],
+        [BitVector(hexstring="AF"), BitVector(hexstring="C7"),
+         BitVector(hexstring="AB"), BitVector(hexstring="30")],
+        [BitVector(hexstring="A2"), BitVector(hexstring="20"),
+         BitVector(hexstring="CB"), BitVector(hexstring="2B")],
+    ]
+    current_state = Matrix.multiply(self.mix_state, state_b)
+    print(current_state)
+
+    state_c = State(4, 4)
+    state_c.matrix = [
+        [BitVector(hexstring="e2"), BitVector(hexstring="91"),
+         BitVector(hexstring="b1"), BitVector(hexstring="d6")],
+        [BitVector(hexstring="32"), BitVector(hexstring="12"),
+         BitVector(hexstring="59"), BitVector(hexstring="79")],
+        [BitVector(hexstring="fc"), BitVector(hexstring="91"),
+         BitVector(hexstring="e4"), BitVector(hexstring="a2")],
+        [BitVector(hexstring="f1"), BitVector(hexstring="88"),
+         BitVector(hexstring="e6"), BitVector(hexstring="93")],
+    ]
+
+    current_state = Matrix.xor(current_state, state_c)
+    print(current_state)
+
+    current_state = self.substitute_bytes(current_state)
+    print(current_state)
+
+    current_state = self.shift_rows(current_state)
+    print(current_state)
+
+    current_state = self.mix_column(current_state)
+    print(current_state)
+
+
 
 def main():
   plain_text = input()
   encryption_key = input()
-  vectors = slice_plain_text(plain_text=encryption_key)
   # for vect in vectors:
   # print(vect.get_bitvector_in_hex())
-  encryptionMechanism = AESKeySchedule(encryption_key, 4, 11, 128)
-  encryptionMechanism.print_keys()
+  schedule = AESKeySchedule(encryption_key, 4, 11, 128)
+  # encryptionMechanism.print_keys()
+  aes = AES(plain_text, schedule)
+  aes.test()
 
 
 if __name__ == '__main__':
